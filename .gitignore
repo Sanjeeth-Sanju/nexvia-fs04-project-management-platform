@@ -17,3 +17,7 @@ media/
 
 # macOS
 .DS_Store
+
+# Node.js / Vite
+node_modules/
+frontend/dist/
