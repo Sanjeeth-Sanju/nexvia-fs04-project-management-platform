@@ -10,6 +10,13 @@ class Workspace(models.Model):
     def __str__(self):
         return self.name
 
+    # Put save() here, inside Workspace
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+
+        if is_new:
+            create_default_workflow_statuses(self)
 
 class WorkspaceMembership(models.Model):
     ROLE_CHOICES = [
@@ -169,3 +176,114 @@ class Issue(models.Model):
 
     def __str__(self):
         return f"{self.project.key} — {self.title}"
+        
+class IssueComment(models.Model):
+    issue = models.ForeignKey(
+        Issue,
+        on_delete=models.CASCADE,
+        related_name="comments",
+    )
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="issue_comments",
+    )
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"Comment by {self.author} on {self.issue}"
+
+class IssueAttachment(models.Model):
+    issue = models.ForeignKey(
+        Issue,
+        on_delete=models.CASCADE,
+        related_name="attachments",
+    )
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="issue_attachments",
+    )
+    file = models.FileField(upload_to="issue_attachments/")
+    filename = models.CharField(max_length=255)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.filename} — {self.issue}"        
+
+
+class AuditLog(models.Model):
+    workspace = models.ForeignKey(
+        Workspace,
+        on_delete=models.CASCADE,
+        related_name="audit_logs",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="audit_logs",
+    )
+    action = models.CharField(max_length=100)
+    entity_type = models.CharField(max_length=50)
+    entity_id = models.PositiveIntegerField()
+    details = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.action} - {self.entity_type} #{self.entity_id}"        
+
+
+class WorkflowStatus(models.Model):
+    workspace = models.ForeignKey(
+        Workspace,
+        on_delete=models.CASCADE,
+        related_name="workflow_statuses",
+    )
+    name = models.CharField(max_length=50)
+    slug = models.SlugField(max_length=50)
+    position = models.PositiveIntegerField(default=0)
+    is_default = models.BooleanField(default=False)
+    is_completed = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["position"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["workspace", "slug"],
+                name="unique_workflow_status_slug_per_workspace",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.workspace.name} — {self.name}"        
+
+def create_default_workflow_statuses(workspace):
+    defaults = [
+        ("To Do", "todo", 0, True, False),
+        ("In Progress", "in_progress", 1, False, False),
+        ("Done", "done", 2, False, True),
+    ]
+
+    for name, slug, position, is_default, is_completed in defaults:
+        WorkflowStatus.objects.get_or_create(
+            workspace=workspace,
+            slug=slug,
+            defaults={
+                "name": name,
+                "position": position,
+                "is_default": is_default,
+                "is_completed": is_completed,
+            },
+        )
+
+      
