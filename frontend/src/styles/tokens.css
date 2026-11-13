@@ -1,0 +1,39 @@
+@import url('https://fonts.googleapis.com/css2?family=Jost:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  color-scheme: light;
+  font-family: 'Jost', sans-serif;
+
+  --color-background: #F5F5F0;
+  --color-surface: #FFFFFF;
+  --color-text: #202B26;
+  --color-muted: #69766E;
+  --color-border: #E7E6DD;
+
+  --color-primary: #5D866C;
+  --color-primary-dark: #42634F;
+  --color-accent: #C2A68C;
+  --color-sand: #E6D8C3;
+  --color-soft-green: #EAF0EB;
+  --color-soft-sand: #F3EDE5;
+
+  --font-body: 'Jost', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  --sidebar-width: 248px;
+  --container-width: 1160px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
+}
