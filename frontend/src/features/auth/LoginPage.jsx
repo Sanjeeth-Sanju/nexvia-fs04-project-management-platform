@@ -126,7 +126,7 @@ function LoginPage() {
 
         <p className="auth-switch">
           Don't have an account?{" "}
-          <Link to={ROUTES.REGISTER}>Create an account</Link>
+          <Link to={ROUTES.REGISTER} state={{ from: location.state?.from }}>Create an account</Link>
         </p>
       </form>
     </AuthLayout>

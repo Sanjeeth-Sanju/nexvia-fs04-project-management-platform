@@ -1,3 +1,6 @@
+import secrets
+from datetime import timedelta
+from django.utils import timezone
 from django.conf import settings
 from django.db import models
 
@@ -46,6 +49,25 @@ class WorkspaceMembership(models.Model):
 
 
 class Project(models.Model):
+    STATUS_CHOICES = [
+        ("active", "Active"),
+        ("completed", "Completed"),
+    ]
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default="active",
+    )
+    completed_at = models.DateTimeField(null=True, blank=True)
+    completed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="completed_projects",
+    )
+
     workspace = models.ForeignKey(
         Workspace,
         on_delete=models.CASCADE,
@@ -66,6 +88,31 @@ class Project(models.Model):
 
     def __str__(self):
         return f"{self.key} — {self.name}"
+
+
+class ProjectMembership(models.Model):
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="memberships",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="project_memberships",
+    )
+    assigned_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "user"],
+                name="unique_project_membership",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.user} — {self.project}"
 
 
 class Board(models.Model):
@@ -185,7 +232,9 @@ class IssueComment(models.Model):
     )
     author = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="issue_comments",
     )
     body = models.TextField()
@@ -206,7 +255,9 @@ class IssueAttachment(models.Model):
     )
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="issue_attachments",
     )
     file = models.FileField(upload_to="issue_attachments/")
@@ -287,3 +338,143 @@ def create_default_workflow_statuses(workspace):
         )
 
       
+
+class Subscription(models.Model):
+    PLAN_CHOICES = [
+        ("free", "Free"),
+        ("pro", "Pro"),
+        ("business", "Business"),
+    ]
+
+    STATUS_CHOICES = [
+        ("active", "Active"),
+        ("trialing", "Trialing"),
+        ("incomplete", "Incomplete"),
+        ("past_due", "Past Due"),
+        ("canceled", "Canceled"),
+        ("unpaid", "Unpaid"),
+    ]
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="billing_subscription",
+    )
+    plan = models.CharField(
+        max_length=20,
+        choices=PLAN_CHOICES,
+        default="free",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default="active",
+    )
+    stripe_customer_id = models.CharField(
+        max_length=255,
+        unique=True,
+        null=True,
+        blank=True,
+    )
+    stripe_subscription_id = models.CharField(
+        max_length=255,
+        unique=True,
+        null=True,
+        blank=True,
+    )
+    current_period_start = models.DateTimeField(null=True, blank=True)
+    current_period_end = models.DateTimeField(null=True, blank=True)
+    cancel_at_period_end = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_stripe_event_created = models.PositiveBigIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user} — {self.plan} ({self.status})"
+
+
+def invitation_expiry():
+    return timezone.now() + timedelta(days=7)
+
+
+class WorkspaceInvitation(models.Model):
+    ROLE_CHOICES = [
+        ("admin", "Admin"),
+        ("member", "Member"),
+    ]
+
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("accepted", "Accepted"),
+        ("expired", "Expired"),
+        ("revoked", "Revoked"),
+    ]
+
+    workspace = models.ForeignKey(
+        Workspace,
+        on_delete=models.CASCADE,
+        related_name="invitations",
+    )
+    email = models.EmailField()
+    projects = models.ManyToManyField(
+        Project,
+        blank=True,
+        related_name="pending_invitations",
+    )
+    role = models.CharField(
+        max_length=20,
+        choices=ROLE_CHOICES,
+        default="member",
+    )
+    token = models.CharField(
+        max_length=64,
+        unique=True,
+        default=secrets.token_urlsafe,
+        editable=False,
+    )
+    invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="sent_workspace_invitations",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default="pending",
+    )
+    expires_at = models.DateTimeField(
+        default=invitation_expiry
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    accepted_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["workspace", "email"],
+                condition=models.Q(status="pending"),
+                name="unique_pending_workspace_invitation",
+            )
+        ]
+
+    def save(self, *args, **kwargs):
+        self.email = self.email.strip().lower()
+        super().save(*args, **kwargs)
+
+    @property
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+    def __str__(self):
+        return f"{self.email} — {self.workspace.name} ({self.status})"
+
+
+
+class StripeWebhookEvent(models.Model):
+    stripe_event_id = models.CharField(max_length=255, unique=True)
+    event_type = models.CharField(max_length=255)
+    processed_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.stripe_event_id} ({self.event_type})"

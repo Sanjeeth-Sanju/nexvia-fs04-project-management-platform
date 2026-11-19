@@ -1,9 +1,11 @@
+from django.utils.text import slugify
 from rest_framework import serializers
 from .permissions import require_workspace_role
 
 from .models import (
     Workspace,
     Project,
+    ProjectMembership,
     Board,
     Sprint,
     Issue,
@@ -15,9 +17,64 @@ from .models import (
 
 
 class WorkspaceSerializer(serializers.ModelSerializer):
+    current_user_role = serializers.SerializerMethodField()
+
     class Meta:
         model = Workspace
-        fields = ["id", "name", "slug", "created_at"]
+        fields = ["id", "name", "slug", "created_at", "current_user_role"]
+        read_only_fields = ["id", "slug", "created_at", "current_user_role"]
+
+    def validate_name(self, value):
+        request = self.context.get("request")
+
+        if request and request.user.is_authenticated:
+            owned_workspaces = Workspace.objects.filter(
+                memberships__user=request.user,
+                memberships__role="owner",
+                name__iexact=value.strip(),
+            )
+
+            if self.instance is not None:
+                owned_workspaces = owned_workspaces.exclude(
+                    pk=self.instance.pk
+                )
+
+            if owned_workspaces.exists():
+                raise serializers.ValidationError(
+                    "You already own a workspace with this name. "
+                    "Choose a different name."
+                )
+
+        return value.strip()
+
+    def get_current_user_role(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return None
+
+        membership = obj.memberships.filter(user=request.user).only("role").first()
+        return membership.role if membership else None
+
+    def create(self, validated_data):
+        name = validated_data["name"]
+        base_slug = slugify(name)
+
+        if not base_slug:
+            raise serializers.ValidationError({
+                "name": "Enter a name containing letters or numbers."
+            })
+
+        slug = base_slug
+        counter = 2
+
+        while Workspace.objects.filter(slug=slug).exists():
+            slug = f"{base_slug}-{counter}"
+            counter += 1
+
+        return Workspace.objects.create(
+            name=name,
+            slug=slug,
+        )
 
 
 class ProjectSerializer(serializers.ModelSerializer):
@@ -29,9 +86,18 @@ class ProjectSerializer(serializers.ModelSerializer):
             "name",
             "key",
             "description",
+            "status",
+            "completed_at",
+            "completed_by",
             "created_at",
         ]
-        read_only_fields = ["id", "created_at"]
+        read_only_fields = [
+            "id",
+            "status",
+            "completed_at",
+            "completed_by",
+            "created_at",
+        ]
 
     def validate_workspace(self, workspace):
         user = self.context["request"].user
@@ -43,6 +109,34 @@ class ProjectSerializer(serializers.ModelSerializer):
         )
 
         return workspace
+
+
+class ProjectUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Project
+        fields = ["name", "key", "description"]
+
+    def validate_name(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Project name cannot be empty.")
+        return value
+
+    def validate_key(self, value):
+        value = value.strip().upper()
+        if not value:
+            raise serializers.ValidationError("Project key cannot be empty.")
+        if len(value) > 10:
+            raise serializers.ValidationError("Project key must be 10 characters or fewer.")
+        queryset = Project.objects.filter(
+            workspace=self.instance.workspace,
+            key__iexact=value,
+        ).exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError(
+                "A project with this key already exists in the workspace."
+            )
+        return value
 
 
 class BoardSerializer(serializers.ModelSerializer):
@@ -87,7 +181,29 @@ class SprintSerializer(serializers.ModelSerializer):
             allowed_roles=["owner", "admin"],
         )
 
+        if self.instance and project.id != self.instance.project_id:
+            raise serializers.ValidationError({
+                "project": "A sprint cannot be moved to another project."
+            })
+
         return project
+
+    def validate(self, attrs):
+        start_date = attrs.get(
+            "start_date",
+            getattr(self.instance, "start_date", None),
+        )
+        end_date = attrs.get(
+            "end_date",
+            getattr(self.instance, "end_date", None),
+        )
+
+        if start_date and end_date and end_date < start_date:
+            raise serializers.ValidationError({
+                "end_date": "End date cannot be earlier than the start date."
+            })
+
+        return attrs
 
 
 class IssueSerializer(serializers.ModelSerializer):
@@ -136,7 +252,17 @@ class IssueSerializer(serializers.ModelSerializer):
                 {"project": "A project is required."}
             )
 
-        if not project.workspace.memberships.filter(user=user).exists():
+        has_workspace_admin_access = project.workspace.memberships.filter(
+            user=user,
+            role__in=["owner", "admin"],
+        ).exists()
+
+        has_project_assignment = ProjectMembership.objects.filter(
+            project=project,
+            user=user,
+        ).exists()
+
+        if not has_workspace_admin_access and not has_project_assignment:
             raise serializers.ValidationError(
                 {"project": "You do not have access to this project."}
             )

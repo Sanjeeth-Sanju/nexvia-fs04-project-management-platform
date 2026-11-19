@@ -1,3 +1,11 @@
+from datetime import timedelta
+from unittest.mock import patch
+
+from django.contrib.auth.hashers import check_password
+from django.utils import timezone
+
+from accounts.models import PasswordChangeChallenge
+
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -413,3 +421,224 @@ class SecureAuthFlowTests(TestCase):
             response.status_code,
             status.HTTP_403_FORBIDDEN,
         )
+
+
+class PasswordChangeSecurityTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="passworduser",
+            email="password@example.com",
+            password="StrongOriginalPassword!2026",
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.request_url = reverse("password-change-request")
+        self.verify_url = reverse("password-change-verify")
+        self.confirm_url = reverse("password-change-confirm")
+
+    def request_code(self):
+        with patch("accounts.views.send_password_change_email") as send_email:
+            response = self.client.post(
+                self.request_url,
+                {},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            otp = send_email.call_args.args[1]
+
+        return response, otp
+
+    def verify_code(self, otp):
+        return self.client.post(
+            self.verify_url,
+            {"otp": otp},
+            format="json",
+        )
+
+    def test_request_stores_hashed_otp(self):
+        response, otp = self.request_code()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        challenge = PasswordChangeChallenge.objects.get(user=self.user)
+
+        self.assertTrue(challenge.otp_hash)
+        self.assertNotEqual(challenge.otp_hash, otp)
+        self.assertTrue(check_password(otp, challenge.otp_hash))
+        self.assertEqual(challenge.sent_count, 1)
+
+    def test_email_failure_does_not_create_challenge_or_consume_quota(self):
+        with patch(
+            "accounts.views.send_password_change_email",
+            side_effect=RuntimeError("Email provider unavailable"),
+        ):
+            failed_response = self.client.post(
+                self.request_url,
+                {},
+                format="json",
+            )
+
+        self.assertEqual(
+            failed_response.status_code,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+        self.assertFalse(
+            PasswordChangeChallenge.objects.filter(user=self.user).exists()
+        )
+
+        # A subsequent request should be allowed immediately.
+        self.request_code()
+
+        self.assertEqual(
+            PasswordChangeChallenge.objects.filter(user=self.user).count(),
+            1,
+        )
+
+    def test_resend_cooldown_is_enforced(self):
+        self.request_code()
+
+        with patch("accounts.views.send_password_change_email") as send_email:
+            response = self.client.post(
+                self.request_url,
+                {},
+                format="json",
+            )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+        send_email.assert_not_called()
+
+    def test_incorrect_otp_attempts_are_limited(self):
+        _, correct_otp = self.request_code()
+
+        wrong_otp = "999999" if correct_otp != "999999" else "000000"
+
+        for _ in range(5):
+            response = self.verify_code(wrong_otp)
+            self.assertEqual(
+                response.status_code,
+                status.HTTP_400_BAD_REQUEST,
+            )
+
+        blocked_response = self.verify_code(wrong_otp)
+
+        self.assertEqual(
+            blocked_response.status_code,
+            status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+        challenge = PasswordChangeChallenge.objects.get(user=self.user)
+        self.assertEqual(challenge.attempts, 5)
+
+    def test_expired_otp_is_rejected(self):
+        _, otp = self.request_code()
+
+        challenge = PasswordChangeChallenge.objects.get(user=self.user)
+        challenge.expires_at = timezone.now() - timedelta(seconds=1)
+        challenge.save(update_fields=["expires_at"])
+
+        response = self.verify_code(otp)
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        self.assertIn("expired", response.data["detail"].lower())
+
+    def test_new_request_invalidates_previous_verified_authorization(self):
+        _, first_otp = self.request_code()
+
+        first_verify = self.verify_code(first_otp)
+        self.assertEqual(first_verify.status_code, status.HTTP_200_OK)
+
+        old_authorization = first_verify.data["authorization"]
+
+        latest = PasswordChangeChallenge.objects.filter(
+            user=self.user
+        ).latest("created_at")
+
+        later_time = latest.last_sent_at + timedelta(seconds=61)
+
+        with patch("accounts.views.timezone.now", return_value=later_time):
+            with patch("accounts.views.send_password_change_email"):
+                second_request = self.client.post(
+                    self.request_url,
+                    {},
+                    format="json",
+                )
+
+        self.assertEqual(second_request.status_code, status.HTTP_200_OK)
+
+        old_challenge = PasswordChangeChallenge.objects.get(
+            pk=latest.pk
+        )
+        self.assertIsNotNone(old_challenge.consumed_at)
+
+        confirm_response = self.client.post(
+            self.confirm_url,
+            {
+                "authorization": old_authorization,
+                "new_password": "DifferentSecurePassword!2026",
+                "password_confirm": "DifferentSecurePassword!2026",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            confirm_response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        self.assertTrue(
+            self.user.check_password("StrongOriginalPassword!2026")
+        )
+
+    def test_successful_password_change_consumes_authorization(self):
+        _, otp = self.request_code()
+
+        verify_response = self.verify_code(otp)
+        self.assertEqual(verify_response.status_code, status.HTTP_200_OK)
+
+        authorization = verify_response.data["authorization"]
+        new_password = "DifferentSecurePassword!2026"
+
+        confirm_response = self.client.post(
+            self.confirm_url,
+            {
+                "authorization": authorization,
+                "new_password": new_password,
+                "password_confirm": new_password,
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            confirm_response.status_code,
+            status.HTTP_200_OK,
+        )
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password(new_password))
+
+        challenge = PasswordChangeChallenge.objects.get(user=self.user)
+        self.assertIsNotNone(challenge.consumed_at)
+        self.assertEqual(challenge.otp_hash, "")
+
+        # The same signed authorization cannot be reused.
+        reuse_response = self.client.post(
+            self.confirm_url,
+            {
+                "authorization": authorization,
+                "new_password": "AnotherSecurePassword!2026",
+                "password_confirm": "AnotherSecurePassword!2026",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            reuse_response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password(new_password))

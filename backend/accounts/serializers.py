@@ -137,3 +137,42 @@ class LoginSerializer(serializers.Serializer):
 
         attrs["user"] = user
         return attrs
+
+
+from .models import Profile
+
+
+class ProfileUpdateSerializer(serializers.ModelSerializer):
+    avatar = serializers.ImageField(required=False, allow_null=True)
+    remove_avatar = serializers.BooleanField(
+        write_only=True,
+        required=False,
+        default=False,
+    )
+
+    class Meta:
+        model = Profile
+        fields = ["display_name", "avatar", "remove_avatar"]
+
+    def validate_avatar(self, value):
+        if value and value.size > 5 * 1024 * 1024:
+            raise serializers.ValidationError(
+                "Avatar must be 5 MB or smaller."
+            )
+        return value
+
+    def validate(self, attrs):
+        if attrs.get("remove_avatar") and attrs.get("avatar"):
+            raise serializers.ValidationError(
+                "Upload an avatar or remove the current one, not both."
+            )
+        return attrs
+
+    def update(self, instance, validated_data):
+        remove_avatar = validated_data.pop("remove_avatar", False)
+
+        if remove_avatar and instance.avatar:
+            instance.avatar.delete(save=False)
+            instance.avatar = None
+
+        return super().update(instance, validated_data)

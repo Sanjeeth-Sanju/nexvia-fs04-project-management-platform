@@ -197,6 +197,22 @@ STATIC_URL = "static/"
 
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+EMAIL_FROM = os.getenv("EMAIL_FROM", "Nexvia <onboarding@resend.dev>")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
+# --------------------------------------------------
+# STRIPE BILLING
+# --------------------------------------------------
+
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+
+STRIPE_PRICE_PRO = os.getenv("STRIPE_PRICE_PRO", "")
+STRIPE_PRICE_BUSINESS = os.getenv("STRIPE_PRICE_BUSINESS", "")
+
+
 
 # --------------------------------------------------
 # DJANGO REST FRAMEWORK
@@ -224,3 +240,8 @@ SIMPLE_JWT = {
 
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
+
+
+# Local development storage for issue attachments.
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"

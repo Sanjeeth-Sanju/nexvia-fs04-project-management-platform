@@ -29,7 +29,8 @@ export async function loginUser(credentials) {
 
   setAccessToken(data.access_token);
 
-  return data.user;
+  // Fetch the complete authenticated user profile after login.
+  return await getCurrentUser();
 }
 
 // Restore session using the HttpOnly refresh cookie

@@ -18,8 +18,7 @@ import {
 
 const AuthContext = createContext(null);
 
-// Shared promise prevents duplicate refresh requests
-// during React StrictMode's development effect cycle.
+// Prevent duplicate refresh requests during React StrictMode.
 let sessionRestorePromise = null;
 
 function restoreSession() {
@@ -42,6 +41,26 @@ function restoreSession() {
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  // Listen for an expired or invalid refresh session.
+  useEffect(() => {
+    function handleSessionExpired() {
+      setUser(null);
+      setLoading(false);
+    }
+
+    window.addEventListener(
+      "auth:session-expired",
+      handleSessionExpired
+    );
+
+    return () => {
+      window.removeEventListener(
+        "auth:session-expired",
+        handleSessionExpired
+      );
+    };
+  }, []);
 
   // Restore an existing session when the app starts.
   useEffect(() => {
@@ -66,6 +85,7 @@ export function AuthProvider({ children }) {
   // Login
   const login = useCallback(async (credentials) => {
     const authenticatedUser = await loginUser(credentials);
+
     setUser(authenticatedUser);
 
     return authenticatedUser;
@@ -74,6 +94,13 @@ export function AuthProvider({ children }) {
   // Registration
   const register = useCallback(async (userData) => {
     return registerUser(userData);
+  }, []);
+
+  // Update the authenticated user across the application.
+  const updateUser = useCallback((updatedFields) => {
+    setUser((currentUser) =>
+      currentUser ? { ...currentUser, ...updatedFields } : currentUser
+    );
   }, []);
 
   // Logout
@@ -92,9 +119,10 @@ export function AuthProvider({ children }) {
       isAuthenticated: Boolean(user),
       login,
       register,
+      updateUser,
       logout,
     }),
-    [user, loading, login, register, logout]
+    [user, loading, login, register, updateUser, logout]
   );
 
   return (
@@ -108,7 +136,9 @@ export function useAuth() {
   const context = useContext(AuthContext);
 
   if (!context) {
-    throw new Error("useAuth must be used inside an AuthProvider.");
+    throw new Error(
+      "useAuth must be used inside an AuthProvider."
+    );
   }
 
   return context;

@@ -1,10 +1,23 @@
+from .billing_views import (
+    BillingPlansView,
+    BillingOverviewView,
+    StripeCheckoutView,
+    StripePortalView,
+    StripeWebhookView,
+)
 from django.urls import path
+from .views import WorkspaceInvitationListCreateView, WorkspaceInvitationAcceptView, WorkspaceInvitationRevokeView, WorkspaceMembersView
 
 from .views import (
     WorkspaceListView,
+    WorkspaceDeleteView,
     ProjectListCreateView,
+    ProjectUpdateView,
+    ProjectDestroyView,
+    ProjectLifecycleView,
     BoardListCreateView,
     SprintListCreateView,
+    SprintDetailView,
     IssueListCreateView,
     IssueDetailView,
     IssueMoveView,
@@ -15,13 +28,46 @@ from .views import (
     WorkflowStatusListCreateView,
     WorkflowStatusDetailView,
     WorkflowStatusReorderView,
+    WorkspaceMemberProjectAssignmentsView,
+    WorkspaceMemberRoleView,
+    WorkspaceMemberRemoveView,
 )
 
 urlpatterns = [
+    path("billing/plans/", BillingPlansView.as_view(), name="billing-plans"),
+    path("billing/overview/", BillingOverviewView.as_view(), name="billing-overview"),
+    path("billing/checkout/", StripeCheckoutView.as_view(), name="billing-checkout"),
+    path("billing/portal/", StripePortalView.as_view(), name="billing-portal"),
+    path("billing/webhook/", StripeWebhookView.as_view(), name="billing-webhook"),
+
+    path("workspaces/<int:workspace_id>/members/", WorkspaceMembersView.as_view(), name="workspace-members"),
+    path(
+        "workspaces/<int:workspace_id>/members/<int:user_id>/role/",
+        WorkspaceMemberRoleView.as_view(),
+        name="workspace-member-role",
+    ),
+    path(
+        "workspaces/<int:workspace_id>/members/<int:user_id>/",
+        WorkspaceMemberRemoveView.as_view(),
+        name="workspace-member-remove",
+    ),
+    path(
+        "workspaces/<int:workspace_id>/members/<int:user_id>/projects/",
+        WorkspaceMemberProjectAssignmentsView.as_view(),
+        name="workspace-member-project-assignments",
+    ),
+    path("workspaces/<int:workspace_id>/invitations/", WorkspaceInvitationListCreateView.as_view(), name="workspace-invitations"),
+    path("invitations/<str:token>/accept/", WorkspaceInvitationAcceptView.as_view(), name="workspace-invitation-accept"),
+    path("invitations/<int:invitation_id>/revoke/", WorkspaceInvitationRevokeView.as_view(), name="workspace-invitation-revoke"),
     path("workspaces/", WorkspaceListView.as_view(), name="workspace-list"),
+    path("workspaces/<int:workspace_id>/", WorkspaceDeleteView.as_view(), name="workspace-delete"),
     path("projects/", ProjectListCreateView.as_view(), name="project-list-create"),
+    path("projects/<int:pk>/edit/", ProjectUpdateView.as_view(), name="project-edit"),
+    path("projects/<int:pk>/lifecycle/", ProjectLifecycleView.as_view(), name="project-lifecycle"),
+    path("projects/<int:pk>/", ProjectDestroyView.as_view(), name="project-delete"),
     path("boards/", BoardListCreateView.as_view(), name="board-list-create"),
     path("sprints/", SprintListCreateView.as_view(), name="sprint-list-create"),
+    path("sprints/<int:pk>/", SprintDetailView.as_view(), name="sprint-detail"),
     path("issues/", IssueListCreateView.as_view(), name="issue-list-create"),
     path("issues/<int:pk>/", IssueDetailView.as_view(), name="issue-detail"),
     path("issues/<int:pk>/move/", IssueMoveView.as_view(), name="issue-move"),

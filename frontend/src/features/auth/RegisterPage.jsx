@@ -1,6 +1,6 @@
 
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Eye, EyeOff, ArrowRight } from "lucide-react";
 
 import AuthLayout from "./components/AuthLayout";
@@ -12,6 +12,7 @@ import { ROUTES } from "../../constants/routes";
 function RegisterPage() {
   const { register } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [formData, setFormData] = useState({
     username: "",
@@ -52,7 +53,7 @@ function RegisterPage() {
 
       navigate(ROUTES.LOGIN, {
         replace: true,
-        state: { registered: true },
+        state: { registered: true, from: location.state?.from },
       });
     } catch (err) {
       const details = err.data;
@@ -167,7 +168,7 @@ function RegisterPage() {
 
         <p className="auth-switch">
           Already have an account?{" "}
-          <Link to={ROUTES.LOGIN}>Sign in</Link>
+          <Link to={ROUTES.LOGIN} state={{ from: location.state?.from }}>Sign in</Link>
         </p>
       </form>
     </AuthLayout>
