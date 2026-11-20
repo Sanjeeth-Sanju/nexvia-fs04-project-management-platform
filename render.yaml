@@ -1,0 +1,51 @@
+services:
+  - type: keyvalue
+    name: nexvia-fs04-redis
+    region: singapore
+    plan: free
+    ipAllowList: []
+
+  - type: web
+    name: nexvia-fs04-api
+    runtime: docker
+    region: singapore
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    autoDeployTrigger: off
+    envVars:
+      - key: DJANGO_DEBUG
+        value: "False"
+
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+
+      - key: DATABASE_URL
+        fromDatabase:
+          name: nexvia-fs04-db
+          property: connectionString
+
+      - key: CELERY_BROKER_URL
+        fromService:
+          name: nexvia-fs04-redis
+          type: keyvalue
+          property: connectionString
+
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          name: nexvia-fs04-redis
+          type: keyvalue
+          property: connectionString
+
+      - key: ALLOWED_HOSTS
+        value: localhost,127.0.0.1
+
+      - key: FRONTEND_URL
+        value: http://localhost:5173
+
+databases:
+  - name: nexvia-fs04-db
+    databaseName: nexvia_fs04
+    user: nexvia
+    region: singapore
+    plan: free
