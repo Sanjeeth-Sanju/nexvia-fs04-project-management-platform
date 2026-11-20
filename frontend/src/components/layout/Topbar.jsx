@@ -1,6 +1,7 @@
-import { Search, Bell, Menu, Shield } from "lucide-react";
+import { Menu, Shield } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useWorkspace } from "../../context/WorkspaceContext";
+import NotificationCenter from "../../features/notifications/NotificationCenter";
 
 function Topbar({ onMenuClick }) {
   const { user } = useAuth();
@@ -8,12 +9,15 @@ function Topbar({ onMenuClick }) {
 
   const displayName =
     user?.display_name || user?.username || user?.email || "Your account";
-  const initials = displayName
-    .split(/[\\s@._-]+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0].toUpperCase())
-    .join("") || "U";
+
+  const initials =
+    displayName
+      .split(/[\s@._-]+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0].toUpperCase())
+      .join("") || "U";
+
   const organizationName = selectedWorkspace?.name || "No workspace";
   const workspaceRole = selectedWorkspace?.current_user_role;
 
@@ -33,6 +37,7 @@ function Topbar({ onMenuClick }) {
           <h1 className="topbar-workspace-title">
             {organizationName}
           </h1>
+
           {workspaceRole && (
             <span className={`member-role role-${workspaceRole}`}>
               <Shield size={13} />
@@ -43,24 +48,7 @@ function Topbar({ onMenuClick }) {
       </div>
 
       <div className="topbar-actions">
-        <label className="topbar-search">
-          <Search size={17} />
-          <input
-            type="search"
-            placeholder="Search anything..."
-            aria-label="Search"
-          />
-          <kbd>⌘ K</kbd>
-        </label>
-
-        <button
-          type="button"
-          className="topbar-icon-button"
-          aria-label="Notifications"
-          title="Notifications"
-        >
-          <Bell size={19} />
-        </button>
+        <NotificationCenter />
 
         <div className="topbar-profile">
           <div className="topbar-avatar">

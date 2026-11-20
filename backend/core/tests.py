@@ -20,6 +20,7 @@ from .models import (
     WorkspaceInvitation,
     Subscription,
     StripeWebhookEvent,
+    Notification,
 )
 
 User = get_user_model()
@@ -2282,3 +2283,295 @@ class StripeWebhookReliabilityTests(APITestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(StripeWebhookEvent.objects.count(), 0)
+
+
+
+class NotificationAPITests(APITestCase):
+    def setUp(self):
+        self.user_a = User.objects.create_user(
+            username="notification_user_a",
+            password="test-password-123",
+        )
+        self.user_b = User.objects.create_user(
+            username="notification_user_b",
+            password="test-password-123",
+        )
+
+        self.notification_a = Notification.objects.create(
+            recipient=self.user_a,
+            event_type="system",
+            title="Welcome",
+            message="Your account is ready.",
+        )
+        self.notification_b = Notification.objects.create(
+            recipient=self.user_b,
+            event_type="system",
+            title="Other user's notification",
+            message="This belongs to another user.",
+        )
+
+    def test_user_only_sees_their_notifications(self):
+        self.client.force_authenticate(user=self.user_a)
+
+        response = self.client.get("/api/notifications/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["results"]), 1)
+        self.assertEqual(
+            response.data["results"][0]["id"],
+            self.notification_a.id,
+        )
+        self.assertEqual(response.data["unread_count"], 1)
+
+    def test_unread_filter_returns_only_unread_notifications(self):
+        Notification.objects.create(
+            recipient=self.user_a,
+            event_type="system",
+            title="Already read",
+            message="This notification has been read.",
+            is_read=True,
+            read_at=timezone.now(),
+        )
+        self.client.force_authenticate(user=self.user_a)
+
+        response = self.client.get("/api/notifications/?unread=true")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["results"]), 1)
+        self.assertFalse(response.data["results"][0]["is_read"])
+        self.assertEqual(response.data["unread_count"], 1)
+
+    def test_user_can_mark_their_notification_as_read(self):
+        self.client.force_authenticate(user=self.user_a)
+
+        response = self.client.patch(
+            f"/api/notifications/{self.notification_a.id}/read/"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.notification_a.refresh_from_db()
+        self.assertTrue(self.notification_a.is_read)
+        self.assertIsNotNone(self.notification_a.read_at)
+
+    def test_user_can_mark_all_their_notifications_as_read(self):
+        Notification.objects.create(
+            recipient=self.user_a,
+            event_type="system",
+            title="Second notification",
+            message="Another notification.",
+        )
+        self.client.force_authenticate(user=self.user_a)
+
+        response = self.client.post("/api/notifications/read-all/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["updated"], 2)
+        self.assertFalse(
+            Notification.objects.filter(
+                recipient=self.user_a,
+                is_read=False,
+            ).exists()
+        )
+        self.assertFalse(self.notification_b.is_read)
+
+    def test_user_can_delete_their_notification(self):
+        self.client.force_authenticate(user=self.user_a)
+
+        response = self.client.delete(
+            f"/api/notifications/{self.notification_a.id}/"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(
+            Notification.objects.filter(pk=self.notification_a.id).exists()
+        )
+
+    def test_user_cannot_delete_another_users_notification(self):
+        self.client.force_authenticate(user=self.user_a)
+
+        response = self.client.delete(
+            f"/api/notifications/{self.notification_b.id}/"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(
+            Notification.objects.filter(pk=self.notification_b.id).exists()
+        )
+
+    def test_clear_all_deletes_only_the_authenticated_users_notifications(self):
+        Notification.objects.create(
+            recipient=self.user_a,
+            event_type="system",
+            title="Another notification",
+            message="Another notification for user A.",
+        )
+        self.client.force_authenticate(user=self.user_a)
+
+        response = self.client.delete("/api/notifications/clear-all/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["deleted"], 2)
+        self.assertFalse(
+            Notification.objects.filter(recipient=self.user_a).exists()
+        )
+        self.assertTrue(
+            Notification.objects.filter(recipient=self.user_b).exists()
+        )
+
+    def test_unauthenticated_user_cannot_list_notifications(self):
+        response = self.client.get("/api/notifications/")
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+
+
+class NotificationEventTests(APITestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username="event_owner",
+            password="test-password-123",
+        )
+        self.member = User.objects.create_user(
+            username="event_member",
+            password="test-password-123",
+        )
+
+        self.workspace = Workspace.objects.create(
+            name="Notification Event Workspace",
+            slug="notification-event-workspace",
+        )
+        WorkspaceMembership.objects.create(
+            workspace=self.workspace,
+            user=self.owner,
+            role="owner",
+        )
+        WorkspaceMembership.objects.create(
+            workspace=self.workspace,
+            user=self.member,
+            role="member",
+        )
+
+        self.project = Project.objects.create(
+            workspace=self.workspace,
+            name="Notification Event Project",
+            key="NEP",
+        )
+        ProjectMembership.objects.create(
+            project=self.project,
+            user=self.member,
+        )
+        self.board = Board.objects.create(
+            project=self.project,
+            name="Notification Event Board",
+        )
+        self.issue = Issue.objects.create(
+            project=self.project,
+            board=self.board,
+            title="Notification test issue",
+        )
+
+    def test_assigning_issue_notifies_new_assignee(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.patch(
+            f"/api/issues/{self.issue.id}/",
+            {"assignee": self.member.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        notification = Notification.objects.get(
+            recipient=self.member,
+            event_type="issue_assigned",
+        )
+        self.assertEqual(notification.actor, self.owner)
+        self.assertEqual(notification.project, self.project)
+        self.assertIn(self.issue.title, notification.message)
+        self.assertFalse(
+            Notification.objects.filter(
+                recipient=self.owner,
+                event_type="issue_assigned",
+            ).exists()
+        )
+
+    def test_comment_notifies_assignee_but_not_commenter(self):
+        self.issue.assignee = self.member
+        self.issue.save(update_fields=["assignee"])
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(
+            f"/api/issues/{self.issue.id}/comments/",
+            {"body": "A notification test comment"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        notification = Notification.objects.get(
+            recipient=self.member,
+            event_type="issue_commented",
+        )
+        self.assertEqual(notification.actor, self.owner)
+        self.assertEqual(
+            notification.metadata["issue_id"],
+            self.issue.id,
+        )
+        self.assertFalse(
+            Notification.objects.filter(
+                recipient=self.owner,
+                event_type="issue_commented",
+            ).exists()
+        )
+
+    def test_role_change_notifies_affected_member(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.patch(
+            f"/api/workspaces/{self.workspace.id}/members/{self.member.id}/role/",
+            {"role": "admin"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        notification = Notification.objects.get(
+            recipient=self.member,
+            event_type="member_role_changed",
+        )
+        self.assertEqual(notification.actor, self.owner)
+        self.assertEqual(notification.workspace, self.workspace)
+        self.assertEqual(notification.metadata["old_role"], "member")
+        self.assertEqual(notification.metadata["new_role"], "admin")
+
+    def test_member_removal_notification_survives_membership_deletion(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.delete(
+            f"/api/workspaces/{self.workspace.id}/members/{self.member.id}/"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(
+            WorkspaceMembership.objects.filter(
+                workspace=self.workspace,
+                user=self.member,
+            ).exists()
+        )
+
+        notification = Notification.objects.get(
+            recipient=self.member,
+            event_type="workspace_removed",
+        )
+        self.assertEqual(notification.actor, self.owner)
+        self.assertEqual(notification.workspace, self.workspace)
+
+        self.client.force_authenticate(user=self.member)
+        inbox_response = self.client.get("/api/notifications/")
+
+        self.assertEqual(inbox_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(inbox_response.data["results"]), 1)
+        self.assertEqual(
+            inbox_response.data["results"][0]["id"],
+            notification.id,
+        )

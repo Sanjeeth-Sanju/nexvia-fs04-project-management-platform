@@ -30,6 +30,7 @@ from .billing import (
 
 from .models import WorkspaceMembership, Workspace, Project, ProjectMembership, Board, Sprint, Issue, IssueComment, IssueAttachment, AuditLog, WorkflowStatus
 from .permissions import require_workspace_role
+from .notification_service import create_notification
 from .serializers import (
     WorkspaceSerializer,
     ProjectSerializer,
@@ -440,6 +441,27 @@ class IssueDetailView(generics.RetrieveUpdateDestroyAPIView):
                 details={"title": issue.title, "changes": changes},
             )
 
+        if (
+            previous["assignee_id"] != issue.assignee_id
+            and issue.assignee_id
+        ):
+            create_notification(
+                recipient=issue.assignee,
+                actor=self.request.user,
+                workspace=issue.project.workspace,
+                project=issue.project,
+                event_type="issue_assigned",
+                title="You were assigned an issue",
+                message=(
+                    f'{self.request.user.get_username()} assigned '
+                    f'"{issue.title}" to you in {issue.project.name}.'
+                ),
+                metadata={
+                    "issue_id": issue.id,
+                    "project_id": issue.project_id,
+                },
+            )
+
     def perform_destroy(self, instance):
         ensure_project_active(instance.project)
         ensure_issue_active(instance)
@@ -626,6 +648,25 @@ class IssueCommentListCreateView(generics.ListCreateAPIView):
                 "issue_title": issue.title,
             },
         )
+
+        if issue.assignee_id:
+            create_notification(
+                recipient=issue.assignee,
+                actor=self.request.user,
+                workspace=issue.project.workspace,
+                project=issue.project,
+                event_type="issue_commented",
+                title="New comment on your assigned issue",
+                message=(
+                    f'{self.request.user.get_username()} commented on '
+                    f'"{issue.title}".'
+                ),
+                metadata={
+                    "issue_id": issue.id,
+                    "comment_id": comment.id,
+                    "project_id": issue.project_id,
+                },
+            )
 
 class IssueCommentDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = IssueCommentSerializer
@@ -1297,6 +1338,36 @@ class WorkspaceMemberRoleView(APIView):
 
         role_changed = old_role != new_role
         projects_changed = old_project_ids != new_project_ids
+        added_ids = new_project_ids - old_project_ids
+        removed_ids = old_project_ids - new_project_ids
+
+        if role_changed or projects_changed:
+            if role_changed:
+                notification_title = "Your workspace role changed"
+                notification_message = (
+                    f'Your role in {workspace.name} changed '
+                    f'from {old_role} to {new_role}.'
+                )
+            else:
+                notification_title = "Your project access changed"
+                notification_message = (
+                    f'Your project access in {workspace.name} was updated.'
+                )
+
+            create_notification(
+                recipient=membership.user,
+                actor=request.user,
+                workspace=workspace,
+                event_type="member_role_changed",
+                title=notification_title,
+                message=notification_message,
+                metadata={
+                    "old_role": old_role,
+                    "new_role": new_role,
+                    "added_project_ids": sorted(added_ids),
+                    "removed_project_ids": sorted(removed_ids),
+                },
+            )
 
         if role_changed:
             AuditLog.objects.create(
@@ -1316,9 +1387,6 @@ class WorkspaceMemberRoleView(APIView):
                     "new_role": new_role,
                 },
             )
-
-        added_ids = new_project_ids - old_project_ids
-        removed_ids = old_project_ids - new_project_ids
 
         response_data = {
             "detail": "Member access updated.",
@@ -1346,28 +1414,20 @@ class WorkspaceMemberRoleView(APIView):
                 if pid in project_names
             ]
 
-            def send_access_notification():
-                try:
-                    from .email_service import send_member_access_update_email
+            from .tasks import send_member_access_update_email_task
 
-                    send_member_access_update_email(
-                        recipient=membership.user.email,
-                        workspace_name=workspace.name,
-                        actor_name=request.user.get_username(),
-                        old_role=old_role,
-                        new_role=new_role,
-                        added_projects=added_projects,
-                        removed_projects=removed_projects,
-                    )
-                    response_data["email_sent"] = True
-                except Exception:
-                    import logging
-                    logging.getLogger(__name__).exception(
-                        "Failed to send workspace access notification."
-                    )
-                    response_data["email_sent"] = False
-
-            transaction.on_commit(send_access_notification)
+            transaction.on_commit(
+                lambda: send_member_access_update_email_task.delay(
+                    recipient=membership.user.email,
+                    workspace_name=workspace.name,
+                    actor_name=request.user.get_username(),
+                    old_role=old_role,
+                    new_role=new_role,
+                    added_projects=added_projects,
+                    removed_projects=removed_projects,
+                )
+            )
+            response_data["email_queued"] = True
 
         return Response(response_data)
 
@@ -1435,23 +1495,31 @@ class WorkspaceMemberRemoveView(APIView):
         removed_workspace_name = workspace.name
         actor_name = request.user.get_username()
 
+        create_notification(
+            recipient=membership.user,
+            actor=request.user,
+            workspace=workspace,
+            event_type="workspace_removed",
+            title="You were removed from a workspace",
+            message=(
+                f'{actor_name} removed you from {removed_workspace_name}.'
+            ),
+            metadata={
+                "workspace_id": workspace.id,
+            },
+        )
+
         membership.delete()
 
-        def send_removal_notification():
-            try:
-                from .email_service import send_member_removed_email
+        from .tasks import send_member_removed_email_task
 
-                send_member_removed_email(
-                    recipient=recipient_email,
-                    workspace_name=removed_workspace_name,
-                    actor_name=actor_name,
-                )
-            except Exception:
-                logging.getLogger(__name__).exception(
-                    "Failed to send workspace member removal email."
-                )
-
-        transaction.on_commit(send_removal_notification)
+        transaction.on_commit(
+            lambda: send_member_removed_email_task.delay(
+                recipient=recipient_email,
+                workspace_name=removed_workspace_name,
+                actor_name=actor_name,
+            )
+        )
 
         return Response({"detail": "Member removed from workspace"})
 

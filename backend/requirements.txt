@@ -11,3 +11,4 @@ resend==2.53.2
 Pillow>=10.0.0
 reportlab==5.1.0
 stripe==17.1.0
+celery[redis]>=5.4,<6

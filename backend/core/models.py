@@ -478,3 +478,67 @@ class StripeWebhookEvent(models.Model):
 
     def __str__(self):
         return f"{self.stripe_event_id} ({self.event_type})"
+
+
+
+class Notification(models.Model):
+    EVENT_CHOICES = [
+        ("workspace_invitation", "Workspace invitation"),
+        ("workspace_added", "Workspace addition"),
+        ("workspace_removed", "Workspace removal"),
+        ("member_role_changed", "Member role changed"),
+        ("project_assigned", "Project assignment"),
+        ("issue_assigned", "Issue assignment"),
+        ("issue_updated", "Issue updated"),
+        ("issue_commented", "Issue comment"),
+        ("issue_mentioned", "Issue mention"),
+        ("sprint_updated", "Sprint updated"),
+        ("system", "System notification"),
+    ]
+
+    recipient = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="notifications",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="triggered_notifications",
+    )
+    workspace = models.ForeignKey(
+        Workspace,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="notifications",
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="notifications",
+    )
+    event_type = models.CharField(max_length=60, choices=EVENT_CHOICES)
+    title = models.CharField(max_length=180)
+    message = models.CharField(max_length=500)
+    target_url = models.CharField(max_length=500, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    is_read = models.BooleanField(default=False)
+    read_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["recipient", "is_read", "-created_at"],
+                name="notif_rec_read_created_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.recipient}: {self.title}"

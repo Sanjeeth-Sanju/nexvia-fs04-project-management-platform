@@ -33,7 +33,22 @@ from .views import (
     WorkspaceMemberRemoveView,
 )
 
+from .notification_views import (
+    NotificationListView,
+    NotificationUnreadCountView,
+    NotificationMarkReadView,
+    NotificationMarkAllReadView,
+    NotificationDeleteView,
+    NotificationClearAllView,
+)
+
 urlpatterns = [
+    path("notifications/", NotificationListView.as_view(), name="notification-list"),
+    path("notifications/unread-count/", NotificationUnreadCountView.as_view(), name="notification-unread-count"),
+    path("notifications/read-all/", NotificationMarkAllReadView.as_view(), name="notification-read-all"),
+    path("notifications/clear-all/", NotificationClearAllView.as_view(), name="notification-clear-all"),
+    path("notifications/<int:notification_id>/read/", NotificationMarkReadView.as_view(), name="notification-read"),
+    path("notifications/<int:notification_id>/", NotificationDeleteView.as_view(), name="notification-delete"),
     path("billing/plans/", BillingPlansView.as_view(), name="billing-plans"),
     path("billing/overview/", BillingOverviewView.as_view(), name="billing-overview"),
     path("billing/checkout/", StripeCheckoutView.as_view(), name="billing-checkout"),
